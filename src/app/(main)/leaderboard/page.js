@@ -1,8 +1,9 @@
 'use client';
 
 import EmptyState from '@/components/ui/EmptyState';
+import { useRealtimeLeaderboard } from '@/hooks/useRealtime';
 import { createClient } from '@/lib/supabase/client';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { HiFire, HiLightningBolt, HiStar } from 'react-icons/hi';
 import { HiTrophy } from 'react-icons/hi2';
 
@@ -27,6 +28,16 @@ export default function LeaderboardPage() {
     }
     load();
   }, [sortBy, supabase]);
+
+  // Live leaderboard updates
+  useRealtimeLeaderboard(useCallback((payload) => {
+    if (payload.eventType === 'UPDATE' && payload.new) {
+      setUsers((prev) => {
+        const updated = prev.map((u) => u.id === payload.new.id ? { ...u, ...payload.new } : u);
+        return updated.sort((a, b) => (b[sortBy] || 0) - (a[sortBy] || 0));
+      });
+    }
+  }, [sortBy]));
 
   const podium = users.slice(0, 3);
   const rest = users.slice(3);

@@ -1,71 +1,119 @@
-'use client';
+﻿'use client';
 
 import { useAuth } from '@/context/AuthProvider';
+import { useRealtimeSubmissions } from '@/hooks/useRealtime';
+import { useStreak } from '@/hooks/useStreak';
 import { CODING } from '@/lib/constants';
 import { createClient } from '@/lib/supabase/client';
 import dynamic from 'next/dynamic';
 import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { HiCheckCircle, HiChevronLeft, HiClock, HiCode, HiLightningBolt, HiPlay, HiXCircle } from 'react-icons/hi';
+import {
+    HiBookmark,
+    HiCheckCircle,
+    HiChevronLeft,
+    HiClock,
+    HiCode,
+    HiLightBulb,
+    HiLightningBolt,
+    HiPlay,
+    HiXCircle,
+} from 'react-icons/hi';
 
-// Lazy-load Monaco so it doesn't break SSR
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
 
-const DIFF_COLORS = { easy: 'var(--success)', medium: 'var(--warning)', hard: 'var(--danger)' };
+const DIFF_COLORS = { Easy: 'var(--success)', Medium: 'var(--warning)', Hard: 'var(--danger)' };
 
 const DEFAULT_CODE = {
   javascript: '// Write your solution here\nfunction solution(input) {\n  \n}\n',
   python: '# Write your solution here\ndef solution(input):\n    pass\n',
-  cpp: '#include <bits/stdc++.h>\nusing namespace std;\n\nint main() {\n    // Write your solution here\n    return 0;\n}\n',
   java: 'public class Solution {\n    public static void main(String[] args) {\n        // Write your solution here\n    }\n}\n',
+  sql: '-- Write your SQL query here\nSELECT ',
 };
 
 const LANG_MONACO = {
   javascript: 'javascript',
   python: 'python',
-  cpp: 'cpp',
   java: 'java',
+  sql: 'sql',
 };
+
+const AI_HINTS = [
+  'Think about the data structure that gives you O(1) lookup time.',
+  'Consider using a hash map to store previously seen values.',
+  'Try breaking the problem into smaller subproblems.',
+  'Consider edge cases: empty input, single element, duplicates.',
+  'Think about whether a two-pointer approach could work here.',
+  'Consider using recursion with memoization.',
+  'Draw it out on paper first — visualize the algorithm step by step.',
+  'Ask yourself: what is the brute force approach? Can you optimize it?',
+];
 
 export default function ProblemPage() {
   const { id } = useParams();
   const router = useRouter();
   const supabase = createClient();
   const { user } = useAuth();
+  const { recordActivity } = useStreak(user?.id);
 
   const [problem, setProblem] = useState(null);
   const [loading, setLoading] = useState(true);
   const [language, setLanguage] = useState('javascript');
   const [code, setCode] = useState(DEFAULT_CODE.javascript);
   const [submitting, setSubmitting] = useState(false);
+  const [running, setRunning] = useState(false);
   const [result, setResult] = useState(null);
-  const [activeTab, setActiveTab] = useState('description'); // description | submissions
+  const [activeTab, setActiveTab] = useState('description');
   const [submissions, setSubmissions] = useState([]);
   const [subsLoading, setSubsLoading] = useState(false);
+  const [bookmarked, setBookmarked] = useState(false);
+  const [showHint, setShowHint] = useState(false);
+  const [hint, setHint] = useState('');
+  const [mcqAnswer, setMcqAnswer] = useState('');
+  const [mcqResult, setMcqResult] = useState(null);
+  const [testOutput, setTestOutput] = useState(null);
 
   useEffect(() => {
     async function load() {
       setLoading(true);
-      const { data } = await supabase
-        .from('coding_problems')
-        .select('*')
-        .eq('id', id)
-        .single();
+
+      // Try slug first, fallback to id
+      const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}/.test(id);
+      let query;
+      if (isUUID) {
+        query = supabase.from('coding_problems').select('*').eq('id', id);
+      } else {
+        query = supabase.from('coding_problems').select('*').eq('slug', id);
+      }
+
+      const { data } = await query.single();
 
       if (data) {
         setProblem(data);
-        // Use starter code if available
-        if (data.starter_code?.[language]) {
-          setCode(data.starter_code[language]);
-        }
+        // Determine available languages
+        const starterKeys = Object.keys(data.starter_code || {});
+        const defaultLang = starterKeys[0] || (data.type === 'sql' ? 'sql' : 'javascript');
+        setLanguage(defaultLang);
+        setCode(data.starter_code?.[defaultLang] || DEFAULT_CODE[defaultLang] || '');
       }
+
+      // Check bookmark status
+      if (user && data) {
+        const { data: bm } = await supabase
+          .from('bookmarks')
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('question_id', data.id)
+          .single();
+        setBookmarked(!!bm);
+      }
+
       setLoading(false);
     }
     load();
-  }, [id, supabase]);
+  }, [id, supabase, user]);
 
-  // When language changes, update editor code
   const handleLangChange = (lang) => {
     setLanguage(lang);
     if (problem?.starter_code?.[lang]) {
@@ -74,30 +122,55 @@ export default function ProblemPage() {
       setCode(DEFAULT_CODE[lang] || '');
     }
     setResult(null);
+    setTestOutput(null);
   };
 
-  // Load user submissions for this problem
   const loadSubmissions = useCallback(async () => {
-    if (!user) return;
+    if (!user || !problem) return;
     setSubsLoading(true);
     const { data } = await supabase
       .from('submissions')
       .select('*')
-      .eq('problem_id', id)
+      .eq('problem_id', problem.id)
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
       .limit(20);
     setSubmissions(data || []);
     setSubsLoading(false);
-  }, [id, user, supabase]);
+  }, [problem, user, supabase]);
 
   useEffect(() => {
     if (activeTab === 'submissions') loadSubmissions();
   }, [activeTab, loadSubmissions]);
 
+  // Realtime submission updates
+  useRealtimeSubmissions(user?.id, useCallback((payload) => {
+    if (payload.eventType === 'INSERT' && payload.new?.problem_id === problem?.id) {
+      setSubmissions((prev) => [payload.new, ...prev]);
+    }
+  }, [problem?.id]));
+
+  const handleRunCode = async () => {
+    if (!code.trim()) return toast.error('Write some code first');
+    setRunning(true);
+    setTestOutput(null);
+
+    // Mock run — test against first 2 test cases only
+    const testCases = (problem?.test_cases || []).slice(0, 2);
+    const mockResults = testCases.map((tc) => ({
+      input: tc.input,
+      expected: tc.expectedOutput || tc.expected_output,
+      passed: code.length > 30,
+    }));
+
+    await new Promise((r) => setTimeout(r, 800));
+    setTestOutput(mockResults);
+    setRunning(false);
+  };
+
   const handleSubmit = async () => {
     if (!user) return toast.error('Sign in to submit');
-    if (!code.trim()) return toast.error('Write some code first');
+    if (!code.trim() && problem?.type !== 'mcq') return toast.error('Write some code first');
 
     setSubmitting(true);
     setResult(null);
@@ -105,13 +178,29 @@ export default function ProblemPage() {
       const res = await fetch('/api/coding/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ problemId: id, language, code }),
+        body: JSON.stringify({ problemId: problem.id, language, code }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Submission failed');
+
       setResult(data);
+
+      // Update progress
+      await fetch('/api/progress', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          questionId: problem.id,
+          status: data.status === 'accepted' ? 'solved' : 'attempted',
+          languageUsed: language,
+          score: data.pointsEarned || 0,
+          submittedCode: code,
+        }),
+      });
+
       if (data.status === 'accepted') {
-        toast.success('All tests passed!');
+        toast.success(`All tests passed! +${data.pointsEarned} pts`);
+        recordActivity();
       } else {
         toast('Some tests failed', { icon: '⚠️' });
       }
@@ -122,9 +211,135 @@ export default function ProblemPage() {
     }
   };
 
+  const handleMCQSubmit = async () => {
+    if (!user) return toast.error('Sign in to submit');
+    if (!mcqAnswer) return toast.error('Select an answer');
+
+    const isCorrect = mcqAnswer === problem.correct_answer;
+    setMcqResult({ correct: isCorrect, answer: mcqAnswer, expected: problem.correct_answer });
+
+    const score = isCorrect ? (problem.points || 5) : 0;
+
+    await fetch('/api/progress', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        questionId: problem.id,
+        status: isCorrect ? 'solved' : 'attempted',
+        languageUsed: 'mcq',
+        score,
+        submittedCode: mcqAnswer,
+      }),
+    });
+
+    if (isCorrect) {
+      toast.success(`Correct! +${score} pts`);
+      recordActivity();
+    } else {
+      toast.error('Incorrect answer');
+    }
+  };
+
+  const toggleBookmark = async () => {
+    if (!user) return toast.error('Sign in to bookmark');
+    const res = await fetch('/api/bookmarks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ questionId: problem.id }),
+    });
+    const data = await res.json();
+    setBookmarked(data.bookmarked);
+    toast.success(data.bookmarked ? 'Bookmarked!' : 'Bookmark removed');
+  };
+
+  const showAIHint = () => {
+    setHint(AI_HINTS[Math.floor(Math.random() * AI_HINTS.length)]);
+    setShowHint(true);
+  };
+
   if (loading) return <div className="loading-container"><div className="spinner" /></div>;
   if (!problem) return <div className="loading-container"><p>Problem not found</p></div>;
 
+  // Get available languages from starter_code
+  const availableLangs = Object.keys(problem.starter_code || {});
+  const langOptions = availableLangs.length > 0
+    ? CODING.LANGUAGES.filter((l) => availableLangs.includes(l.id))
+    : CODING.LANGUAGES;
+
+  // MCQ Rendering
+  if (problem.type === 'mcq') {
+    return (
+      <div className="problem-detail--mcq animate-fade-in">
+        <div style={{ maxWidth: 800, margin: '0 auto', padding: 'var(--space-lg)' }}>
+          <button className="btn btn--ghost btn--sm" onClick={() => router.push('/coding')} style={{ marginBottom: 'var(--space-md)' }}>
+            <HiChevronLeft size={16} /> Back to Problems
+          </button>
+
+          <div className="flex gap-sm" style={{ alignItems: 'center', marginBottom: 'var(--space-lg)' }}>
+            <h2 style={{ margin: 0 }}>{problem.title}</h2>
+            <span className="badge" style={{
+              background: `${DIFF_COLORS[problem.difficulty]}22`,
+              color: DIFF_COLORS[problem.difficulty],
+            }}>
+              {problem.difficulty}
+            </span>
+            <span className="badge badge--cat">MCQ</span>
+            <button className="btn btn--ghost btn--sm" onClick={toggleBookmark} style={{ marginLeft: 'auto' }}>
+              <HiBookmark size={18} color={bookmarked ? 'var(--accent-primary)' : 'var(--text-muted)'} />
+            </button>
+          </div>
+
+          <div className="card" style={{ marginBottom: 'var(--space-xl)' }}>
+            <div style={{ lineHeight: 1.8, whiteSpace: 'pre-wrap' }}>{problem.description}</div>
+          </div>
+
+          <div className="card" style={{ marginBottom: 'var(--space-lg)' }}>
+            <h4 style={{ marginBottom: 'var(--space-md)' }}>Choose your answer:</h4>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-sm)' }}>
+              {(problem.mcq_options || []).map((option, i) => {
+                const isSelected = mcqAnswer === option;
+                const showResult = mcqResult !== null;
+                const isCorrect = showResult && option === mcqResult.expected;
+                const isWrong = showResult && isSelected && !mcqResult.correct;
+
+                return (
+                  <button
+                    key={i}
+                    className={`mcq-option ${isSelected ? 'mcq-option--selected' : ''} ${isCorrect ? 'mcq-option--correct' : ''} ${isWrong ? 'mcq-option--wrong' : ''}`}
+                    onClick={() => { if (!mcqResult) setMcqAnswer(option); }}
+                    disabled={!!mcqResult}
+                  >
+                    <span className="mcq-option__letter">{String.fromCharCode(65 + i)}</span>
+                    <span>{option}</span>
+                    {isCorrect && <HiCheckCircle size={18} color="var(--success)" style={{ marginLeft: 'auto' }} />}
+                    {isWrong && <HiXCircle size={18} color="var(--danger)" style={{ marginLeft: 'auto' }} />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {!mcqResult ? (
+            <button className="btn btn--primary" onClick={handleMCQSubmit} disabled={!mcqAnswer}>
+              Submit Answer
+            </button>
+          ) : (
+            <div className={`card ${mcqResult.correct ? 'card--success' : 'card--error'}`}>
+              <div className="flex gap-sm" style={{ alignItems: 'center' }}>
+                {mcqResult.correct ? (
+                  <><HiCheckCircle size={22} color="var(--success)" /> <strong style={{ color: 'var(--success)' }}>Correct!</strong></>
+                ) : (
+                  <><HiXCircle size={22} color="var(--danger)" /> <strong style={{ color: 'var(--danger)' }}>Incorrect</strong> <span className="text-muted">— Answer: {mcqResult.expected}</span></>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Code / SQL / Project Rendering
   return (
     <div className="problem-detail animate-fade-in">
       {/* Left Panel — Problem */}
@@ -134,36 +349,38 @@ export default function ProblemPage() {
         </button>
 
         {/* Tabs */}
-        <div className="flex gap-sm" style={{ borderBottom: '1px solid var(--border)', marginBottom: 'var(--space-lg)', paddingBottom: 'var(--space-sm)' }}>
-          <button
-            className={`btn btn--sm ${activeTab === 'description' ? 'btn--primary' : 'btn--ghost'}`}
-            onClick={() => setActiveTab('description')}
-          >
-            Description
-          </button>
-          <button
-            className={`btn btn--sm ${activeTab === 'submissions' ? 'btn--primary' : 'btn--ghost'}`}
-            onClick={() => setActiveTab('submissions')}
-          >
-            My Submissions
-          </button>
+        <div className="flex gap-sm" style={{ borderBottom: '1px solid var(--border-color)', marginBottom: 'var(--space-lg)', paddingBottom: 'var(--space-sm)' }}>
+          {['description', 'submissions'].map((tab) => (
+            <button
+              key={tab}
+              className={`btn btn--sm ${activeTab === tab ? 'btn--primary' : 'btn--ghost'}`}
+              onClick={() => setActiveTab(tab)}
+            >
+              {tab === 'description' ? 'Description' : 'My Submissions'}
+            </button>
+          ))}
         </div>
 
         {activeTab === 'description' ? (
           <>
-            <div className="flex gap-sm" style={{ alignItems: 'center', marginBottom: 'var(--space-md)' }}>
+            <div className="flex gap-sm" style={{ alignItems: 'center', marginBottom: 'var(--space-md)', flexWrap: 'wrap' }}>
               <h2 style={{ margin: 0 }}>{problem.title}</h2>
               <span className="badge" style={{
                 background: `${DIFF_COLORS[problem.difficulty]}22`,
                 color: DIFF_COLORS[problem.difficulty],
                 border: `1px solid ${DIFF_COLORS[problem.difficulty]}44`,
               }}>
-                {problem.difficulty?.charAt(0).toUpperCase() + problem.difficulty?.slice(1)}
+                {problem.difficulty}
               </span>
+              <span className="badge badge--cat">{problem.category}</span>
+              <span className="text-sm" style={{ color: 'var(--warning)' }}>+{problem.points || 10} pts</span>
+              <button className="btn btn--ghost btn--sm" onClick={toggleBookmark} style={{ marginLeft: 'auto', padding: 4 }}>
+                <HiBookmark size={18} color={bookmarked ? 'var(--accent-primary)' : 'var(--text-muted)'} />
+              </button>
             </div>
 
             <div className="problem-description" style={{ lineHeight: 1.8, marginBottom: 'var(--space-xl)' }}>
-              <p style={{ whiteSpace: 'pre-wrap' }}>{problem.description}</p>
+              <div style={{ whiteSpace: 'pre-wrap' }}>{problem.description}</div>
             </div>
 
             {/* Examples */}
@@ -171,7 +388,7 @@ export default function ProblemPage() {
               <div style={{ marginBottom: 'var(--space-xl)' }}>
                 <h4>Examples</h4>
                 {problem.examples.map((ex, i) => (
-                  <div key={i} className="card" style={{ marginBottom: 'var(--space-md)', background: 'var(--surface-secondary)' }}>
+                  <div key={i} className="card" style={{ marginBottom: 'var(--space-md)', background: 'var(--bg-tertiary)' }}>
                     <p className="text-sm"><strong>Input:</strong> <code>{ex.input}</code></p>
                     <p className="text-sm"><strong>Output:</strong> <code>{ex.output}</code></p>
                     {ex.explanation && <p className="text-sm text-muted"><strong>Explanation:</strong> {ex.explanation}</p>}
@@ -182,7 +399,7 @@ export default function ProblemPage() {
 
             {/* Constraints */}
             {problem.constraints?.length > 0 && (
-              <div>
+              <div style={{ marginBottom: 'var(--space-lg)' }}>
                 <h4>Constraints</h4>
                 <ul style={{ paddingLeft: 'var(--space-lg)', color: 'var(--text-secondary)' }}>
                   {problem.constraints.map((c, i) => (
@@ -194,12 +411,24 @@ export default function ProblemPage() {
 
             {/* Tags */}
             {problem.tags?.length > 0 && (
-              <div className="flex gap-xs" style={{ marginTop: 'var(--space-lg)', flexWrap: 'wrap' }}>
+              <div className="flex gap-xs" style={{ marginBottom: 'var(--space-lg)', flexWrap: 'wrap' }}>
                 {problem.tags.map((t) => (
                   <span key={t} className="badge badge--accent">{t}</span>
                 ))}
               </div>
             )}
+
+            {/* AI Hint */}
+            <div style={{ marginBottom: 'var(--space-lg)' }}>
+              <button className="btn btn--secondary btn--sm" onClick={showAIHint}>
+                <HiLightBulb size={16} /> AI Hint
+              </button>
+              {showHint && (
+                <div className="card" style={{ marginTop: 'var(--space-sm)', background: 'var(--bg-tertiary)', borderLeft: '3px solid var(--accent-primary)' }}>
+                  <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>💡 {hint}</p>
+                </div>
+              )}
+            </div>
           </>
         ) : (
           /* Submissions tab */
@@ -219,7 +448,7 @@ export default function ProblemPage() {
                           <HiXCircle size={18} color="var(--danger)" />
                         }
                         <strong style={{ color: s.status === 'accepted' ? 'var(--success)' : 'var(--danger)', textTransform: 'capitalize' }}>
-                          {s.status}
+                          {s.status?.replace('_', ' ')}
                         </strong>
                       </div>
                       <div className="flex gap-sm text-sm text-muted">
@@ -232,6 +461,11 @@ export default function ProblemPage() {
                       <div className="text-sm text-muted" style={{ marginTop: 4 }}>
                         <HiClock size={14} /> {s.execution_time}ms
                         {s.test_results && ` • ${s.test_results.passed || 0}/${s.test_results.total || 0} tests passed`}
+                      </div>
+                    )}
+                    {s.points_earned > 0 && (
+                      <div className="text-sm" style={{ marginTop: 4, color: 'var(--warning)' }}>
+                        +{s.points_earned} points
                       </div>
                     )}
                   </div>
@@ -254,22 +488,35 @@ export default function ProblemPage() {
               onChange={(e) => handleLangChange(e.target.value)}
               style={{ width: 'auto', padding: '4px 8px', fontSize: '0.85rem' }}
             >
-              {CODING.LANGUAGES.map((l) => (
+              {langOptions.map((l) => (
                 <option key={l.id} value={l.id}>{l.name}</option>
               ))}
             </select>
           </div>
-          <button
-            className="btn btn--primary btn--sm"
-            onClick={handleSubmit}
-            disabled={submitting}
-          >
-            {submitting ? (
-              <><HiLightningBolt className="spin" size={14} /> Running...</>
-            ) : (
-              <><HiPlay size={14} /> Submit</>
-            )}
-          </button>
+          <div className="flex gap-sm">
+            <button
+              className="btn btn--secondary btn--sm"
+              onClick={handleRunCode}
+              disabled={running}
+            >
+              {running ? (
+                <><HiLightningBolt className="spin" size={14} /> Running...</>
+              ) : (
+                <><HiPlay size={14} /> Run Code</>
+              )}
+            </button>
+            <button
+              className="btn btn--primary btn--sm"
+              onClick={handleSubmit}
+              disabled={submitting}
+            >
+              {submitting ? (
+                <><HiLightningBolt className="spin" size={14} /> Submitting...</>
+              ) : (
+                <><HiCheckCircle size={14} /> Submit</>
+              )}
+            </button>
+          </div>
         </div>
 
         {/* Monaco Editor */}
@@ -294,7 +541,21 @@ export default function ProblemPage() {
           />
         </div>
 
-        {/* Results Panel */}
+        {/* Test Output (Run Code) */}
+        {testOutput && (
+          <div className="editor-results">
+            <h4 style={{ marginBottom: 'var(--space-sm)' }}>Test Results (Run)</h4>
+            {testOutput.map((t, i) => (
+              <div key={i} className="flex gap-sm" style={{ alignItems: 'center', marginBottom: 4 }}>
+                {t.passed ? <HiCheckCircle size={16} color="var(--success)" /> : <HiXCircle size={16} color="var(--danger)" />}
+                <span className="text-sm">Test {i + 1}: <code>{t.input}</code></span>
+                <span className="text-sm text-muted">→ Expected: <code>{t.expected}</code></span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Submit Results */}
         {result && (
           <div className="editor-results">
             <div className="flex-between" style={{ marginBottom: 'var(--space-md)' }}>
@@ -310,36 +571,27 @@ export default function ProblemPage() {
                   {result.status === 'accepted' ? 'Accepted' : 'Wrong Answer'}
                 </strong>
               </div>
-              {result.executionTime && (
-                <span className="text-sm text-muted"><HiClock size={14} /> {result.executionTime}ms</span>
-              )}
+              <div className="flex gap-md text-sm text-muted">
+                {result.executionTime && <span><HiClock size={14} /> {result.executionTime}ms</span>}
+                {result.testResults && <span>{result.testResults.passed}/{result.testResults.total} passed</span>}
+                {result.pointsEarned > 0 && <span style={{ color: 'var(--warning)', fontWeight: 600 }}>+{result.pointsEarned} pts</span>}
+              </div>
             </div>
 
-            {/* Test case results */}
-            {result.testResults && (
-              <div className="text-sm">
-                <p style={{ marginBottom: 'var(--space-sm)' }}>
-                  <strong>{result.testResults.passed}</strong> / <strong>{result.testResults.total}</strong> tests passed
-                </p>
-                {result.testResults.details?.map((t, i) => (
-                  <div key={i} className="card" style={{ padding: 'var(--space-sm)', marginBottom: 'var(--space-xs)', background: 'var(--surface-secondary)' }}>
-                    <div className="flex gap-xs" style={{ alignItems: 'center' }}>
-                      {t.passed ?
-                        <HiCheckCircle size={14} color="var(--success)" /> :
-                        <HiXCircle size={14} color="var(--danger)" />
-                      }
-                      <span>Test {i + 1}</span>
-                    </div>
-                    {!t.passed && t.expected !== undefined && (
-                      <div style={{ marginTop: 4 }}>
-                        <p className="text-muted">Expected: <code>{JSON.stringify(t.expected)}</code></p>
-                        <p className="text-muted">Got: <code>{JSON.stringify(t.actual)}</code></p>
-                      </div>
-                    )}
-                  </div>
-                ))}
+            {result.testResults?.details?.map((t, i) => (
+              <div key={i} className="flex gap-sm" style={{ alignItems: 'center', marginBottom: 4 }}>
+                {t.passed ?
+                  <HiCheckCircle size={16} color="var(--success)" /> :
+                  <HiXCircle size={16} color="var(--danger)" />
+                }
+                <span className="text-sm">
+                  Test {i + 1}: {t.passed ? 'Passed' : 'Failed'}
+                </span>
+                {!t.passed && t.expected && (
+                  <span className="text-sm text-muted"> — Expected: <code>{t.expected}</code></span>
+                )}
               </div>
-            )}
+            ))}
           </div>
         )}
       </div>

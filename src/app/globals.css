@@ -564,13 +564,67 @@ select.input {
 .coding__header, .contests__header, .leaderboard__header, .admin__header, .upload__header { display: flex; flex-direction: column; gap: var(--space-sm); }
 
 /* ---- CODING PAGE (BEM) ---- */
+
+/* Top grid: stats + daily challenge + progress */
+.coding__top-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-lg); }
+.coding__stats-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--space-md); }
+.coding__stat-card { display: flex; flex-direction: column; align-items: center; padding: var(--space-md); text-align: center; }
+.coding__stat-value { font-size: var(--font-2xl); font-weight: 800; line-height: 1; margin-bottom: 4px; }
+.coding__stat-label { font-size: var(--font-sm); color: var(--text-muted); }
+
+/* Daily challenge */
+.coding__daily-card { text-decoration: none; color: var(--text-primary); border: 1px solid var(--accent-primary); background: rgba(108,92,231,0.05); padding: var(--space-md); transition: all var(--transition-fast); }
+.coding__daily-card:hover { background: rgba(108,92,231,0.12); transform: translateY(-2px); }
+.coding__daily-badge { font-size: var(--font-sm); font-weight: 700; color: var(--accent-primary); margin-bottom: var(--space-sm); }
+
+/* Progress bar card */
+.coding__progress-bar-card { padding: var(--space-md); }
+.coding__progress-bar { display: flex; height: 10px; border-radius: 8px; overflow: hidden; background: var(--bg-tertiary); }
+.coding__progress-segment { height: 100%; transition: width 0.4s ease; }
+.coding__progress-segment--easy { background: var(--success); }
+.coding__progress-segment--medium { background: var(--warning); }
+.coding__progress-segment--hard { background: var(--danger); }
+
+/* Category tabs */
+.coding__category-tabs { display: flex; gap: var(--space-xs); overflow-x: auto; padding-bottom: var(--space-xs); }
+.coding__category-tab { display: flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: var(--radius-full); border: 1px solid var(--border-color); background: transparent; color: var(--text-secondary); font-size: var(--font-sm); font-weight: 500; cursor: pointer; white-space: nowrap; transition: all var(--transition-fast); }
+.coding__category-tab:hover { background: var(--bg-hover); color: var(--text-primary); }
+.coding__category-tab--active { background: var(--accent-primary); color: #fff; border-color: var(--accent-primary); }
+.coding__category-tab--active:hover { background: var(--accent-primary); color: #fff; }
+
+/* Filters row */
+.coding__filters { padding: var(--space-md); }
+
+/* Problem list */
 .coding__problems { display: flex; flex-direction: column; }
-.problem-row { display: grid; grid-template-columns: 1fr 100px 100px 80px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border-color); transition: background var(--transition-fast); cursor: pointer; }
+.problem-row { display: grid; grid-template-columns: 40px 1fr 90px 80px 85px 65px 70px 40px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border-color); transition: background var(--transition-fast); cursor: pointer; gap: 8px; }
 .problem-row:hover { background: var(--bg-hover); }
 .problem-row--header { font-size: var(--font-sm); color: var(--text-muted); font-weight: 600; cursor: default; }
 .problem-row--header:hover { background: transparent; }
+.problem-row--solved { background: rgba(0, 206, 201, 0.04); }
 .problem-row a { color: var(--text-primary); font-weight: 500; text-decoration: none; }
 .problem-row a:hover { color: var(--accent-primary); }
+.problem-row__num { font-size: var(--font-sm); color: var(--text-muted); text-align: center; }
+.problem-row__title { min-width: 0; }
+.problem-row__cat, .problem-row__type, .problem-row__diff, .problem-row__pts, .problem-row__status, .problem-row__actions { text-align: center; }
+
+/* Badges */
+.badge--tag { font-size: 0.7rem; padding: 2px 6px; background: rgba(108,92,231,0.1); color: var(--accent-primary); border-radius: var(--radius-sm); }
+.badge--cat { font-size: var(--font-xs); padding: 3px 8px; background: rgba(0,206,201,0.15); color: var(--accent-secondary); border-radius: var(--radius-sm); }
+
+/* MCQ question page */
+.problem-detail--mcq { animation: fadeIn 0.3s ease; }
+.mcq-option { display: flex; align-items: center; gap: var(--space-md); padding: var(--space-md); border: 2px solid var(--border-color); border-radius: var(--radius-md); background: transparent; color: var(--text-primary); font-size: var(--font-base); cursor: pointer; transition: all var(--transition-fast); width: 100%; text-align: left; }
+.mcq-option:hover:not(:disabled) { border-color: var(--accent-primary); background: rgba(108,92,231,0.06); }
+.mcq-option--selected { border-color: var(--accent-primary); background: rgba(108,92,231,0.1); }
+.mcq-option--correct { border-color: var(--success) !important; background: rgba(0,206,201,0.1) !important; }
+.mcq-option--wrong { border-color: var(--danger) !important; background: rgba(255,118,117,0.1) !important; }
+.mcq-option:disabled { cursor: default; opacity: 0.8; }
+.mcq-option__letter { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: var(--bg-tertiary); font-weight: 700; font-size: var(--font-sm); flex-shrink: 0; }
+
+/* Card variants */
+.card--success { border: 1px solid var(--success); background: rgba(0,206,201,0.06); }
+.card--error { border: 1px solid var(--danger); background: rgba(255,118,117,0.06); }
 
 /* Problem detail / split view */
 .problem-detail { display: grid; grid-template-columns: 1fr 1fr; height: calc(100vh - var(--header-height)); gap: 0; }
@@ -641,8 +695,13 @@ select.input {
   .video-player__sidebar { order: 2; }
   .problem-view { grid-template-columns: 1fr; height: auto; }
   .problem-detail { grid-template-columns: 1fr; height: auto; }
+  .problem-detail--mcq { padding: var(--space-md); }
   .problem-view__description { border-right: none; border-bottom: 1px solid var(--border-color); }
   .problem-detail__left { border-right: none; border-bottom: 1px solid var(--border-color); }
+  .coding__top-grid { grid-template-columns: 1fr; }
+  .coding__stats-row { grid-template-columns: repeat(4, 1fr); }
+  .problem-row { grid-template-columns: 30px 1fr 70px 65px 40px; }
+  .problem-row__cat, .problem-row__type, .problem-row__pts { display: none; }
   .profile-header { flex-direction: column; align-items: center; text-align: center; }
   .profile-stats { justify-content: center; }
   .leaderboard__podium { grid-template-columns: 1fr; }

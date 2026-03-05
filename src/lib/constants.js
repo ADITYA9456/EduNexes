@@ -25,9 +25,12 @@ export const CODING = {
     { id: 'javascript', name: 'JavaScript' },
     { id: 'python', name: 'Python' },
     { id: 'java', name: 'Java' },
+    { id: 'sql', name: 'SQL' },
     { id: 'cpp', name: 'C++' },
     { id: 'c', name: 'C' },
   ],
+  CATEGORIES: ['All', 'DSA', 'Python', 'Java', 'SQL', 'WebDev'],
+  TYPES: ['code', 'mcq', 'sql', 'project'],
   SUBMISSION_STATUS: {
     PENDING: 'pending',
     RUNNING: 'running',

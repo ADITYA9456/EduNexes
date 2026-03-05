@@ -4,9 +4,11 @@ import { useAuth } from '@/context/AuthProvider';
 import { useStreak } from '@/hooks/useStreak';
 import { BADGES } from '@/lib/constants';
 import { createClient } from '@/lib/supabase/client';
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
+    HiBookmark,
     HiCalendar, HiCheckCircle,
     HiCode,
     HiFire,
@@ -28,6 +30,8 @@ export default function ProfilePage() {
   const [recentSubs, setRecentSubs] = useState([]);
   const [subsLoading, setSubsLoading] = useState(true);
   const [streakDates, setStreakDates] = useState([]);
+  const [bookmarks, setBookmarks] = useState([]);
+  const [bookmarksLoading, setBookmarksLoading] = useState(true);
 
   useEffect(() => {
     if (profile) {
@@ -60,6 +64,15 @@ export default function ProfilePage() {
         .order('activity_date', { ascending: false })
         .limit(30);
       setStreakDates((streaks || []).map((s) => s.activity_date));
+
+      // Load bookmarked problems
+      setBookmarksLoading(true);
+      const bmRes = await fetch('/api/bookmarks');
+      if (bmRes.ok) {
+        const bmData = await bmRes.json();
+        setBookmarks(bmData.bookmarks || []);
+      }
+      setBookmarksLoading(false);
     }
     loadRecent();
   }, [user, supabase]);
@@ -209,6 +222,37 @@ export default function ProfilePage() {
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Bookmarked Problems */}
+      <div className="card" style={{ marginBottom: 'var(--space-xl)' }}>
+        <h3 style={{ marginBottom: 'var(--space-md)' }}><HiBookmark size={18} /> Bookmarked Problems</h3>
+        {bookmarksLoading ? (
+          <div className="loading-container"><div className="spinner" /></div>
+        ) : bookmarks.length === 0 ? (
+          <p className="text-muted">No bookmarked problems. Bookmark problems to revisit them later!</p>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-sm)' }}>
+            {bookmarks.map((bm) => {
+              const q = bm.coding_problems;
+              if (!q) return null;
+              const diffColor = { Easy: 'var(--success)', Medium: 'var(--warning)', Hard: 'var(--danger)' }[q.difficulty] || 'var(--text-muted)';
+              return (
+                <Link
+                  key={bm.id}
+                  href={`/coding/${q.slug || q.id}`}
+                  style={{ textDecoration: 'none', color: 'var(--text-primary)', padding: 'var(--space-sm)', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                >
+                  <span style={{ fontWeight: 500 }}>{q.title}</span>
+                  <div className="flex gap-sm" style={{ alignItems: 'center' }}>
+                    <span className="badge" style={{ background: `${diffColor}22`, color: diffColor, fontSize: '0.75rem' }}>{q.difficulty}</span>
+                    {q.category && <span className="badge badge--cat">{q.category}</span>}
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Recent Submissions */}
