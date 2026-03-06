@@ -20,6 +20,8 @@ export default function HomePage() {
   const sentinelRef = useRef(null);
   // Prevent duplicate fetches
   const fetchingRef = useRef(false);
+  // Scroll container ref
+  const scrollContainerRef = useRef(null);
 
   const fetchVideos = useCallback(async (reset = false, pageToken = '') => {
     if (fetchingRef.current) return;
@@ -70,13 +72,21 @@ export default function HomePage() {
     const sentinel = sentinelRef.current;
     if (!sentinel) return;
 
+    // Find the actual scroll container (.layout__content)
+    if (!scrollContainerRef.current) {
+      scrollContainerRef.current = sentinel.closest('.layout__content') || null;
+    }
+
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting && hasMore && !fetchingRef.current && nextPageToken) {
           fetchVideos(false, nextPageToken);
         }
       },
-      { rootMargin: '600px' }
+      {
+        root: scrollContainerRef.current,
+        rootMargin: '600px',
+      }
     );
 
     observer.observe(sentinel);
@@ -113,13 +123,13 @@ export default function HomePage() {
 
       {/* Loading more indicator */}
       {loadingMore && (
-        <div style={{ textAlign: 'center', marginTop: 'var(--space-lg)' }}>
+        <div className="loading-container" style={{ minHeight: 80 }}>
           <div className="spinner" />
         </div>
       )}
 
       {/* Infinite scroll sentinel */}
-      {hasMore && <div ref={sentinelRef} style={{ height: 1 }} />}
+      {hasMore && <div ref={sentinelRef} style={{ height: 10 }} />}
     </div>
   );
 }

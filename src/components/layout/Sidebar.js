@@ -31,6 +31,13 @@ export default function Sidebar({ open, onClose }) {
   const pathname = usePathname();
   const { user, isAdmin } = useAuth();
 
+  // Only close sidebar on mobile (overlay mode), not on desktop
+  const handleLinkClick = () => {
+    if (typeof window !== 'undefined' && window.innerWidth <= 768) {
+      onClose();
+    }
+  };
+
   return (
     <>
       {/* Mobile overlay */}
@@ -59,7 +66,8 @@ export default function Sidebar({ open, onClose }) {
                     key={href}
                     href={href}
                     className={`sidebar__link ${isActive ? 'sidebar__link--active' : ''}`}
-                    onClick={onClose}
+                    onClick={handleLinkClick}
+                    title={label}
                   >
                     <Icon size={20} className="sidebar__link-icon" />
                     <span className="sidebar__link-text">{label}</span>
@@ -75,7 +83,8 @@ export default function Sidebar({ open, onClose }) {
               <Link
                 href="/admin"
                 className={`sidebar__link ${pathname === '/admin' ? 'sidebar__link--active' : ''}`}
-                onClick={onClose}
+                onClick={handleLinkClick}
+                title="Admin Panel"
               >
                 <HiShieldCheck size={20} className="sidebar__link-icon" />
                 <span className="sidebar__link-text">Admin Panel</span>
