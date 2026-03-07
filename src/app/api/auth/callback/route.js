@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-// Supabase auth callback — handles OAuth redirects and email confirmations
+// Supabase auth callback — handles OAuth redirects (Google) and email confirmations
 export async function GET(request) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get('code');

@@ -1,7 +1,23 @@
+import { createAdminSupabase } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
 const BASE_URL = 'https://www.googleapis.com/youtube/v3';
+
+// Free Piped API instances (fallback when YouTube quota exceeded)
+const PIPED_INSTANCES = [
+  'https://pipedapi.kavin.rocks',
+  'https://pipedapi.adminforge.de',
+  'https://pipedapi.in.projectsegfau.lt',
+];
+
+// In-memory cache to reduce YouTube API quota usage
+const cache = new Map();
+const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+// Track if YouTube quota is exhausted to skip it and go straight to Piped
+let quotaExhausted = false;
+let quotaExhaustedAt = 0;
+const QUOTA_COOLDOWN = 60 * 60 * 1000; // 1 hour
 
 const CATEGORY_QUERIES = {
   All: 'programming tutorial OR coding tutorial OR computer science',
@@ -20,10 +36,6 @@ const CATEGORY_QUERIES = {
 
 export async function GET(request) {
   try {
-    if (!YOUTUBE_API_KEY) {
-      return NextResponse.json({ error: 'YouTube API key not configured' }, { status: 500 });
-    }
-
     const { searchParams } = new URL(request.url);
     const query = searchParams.get('q') || '';
     const category = searchParams.get('category') || 'All';
@@ -37,6 +49,46 @@ export async function GET(request) {
       searchQuery = `${searchQuery} ${category}`;
     }
 
+    // Check cache first
+    const cacheKey = `${searchQuery}|${pageToken}`;
+    const cached = cache.get(cacheKey);
+    if (cached && Date.now() - cached.time < CACHE_TTL) {
+      return NextResponse.json(cached.data);
+    }
+
+    // Reset quota flag after cooldown
+    if (quotaExhausted && Date.now() - quotaExhaustedAt > QUOTA_COOLDOWN) {
+      quotaExhausted = false;
+    }
+
+    // Try YouTube API first (if quota not exhausted and key exists)
+    if (YOUTUBE_API_KEY && !quotaExhausted) {
+      const ytResult = await fetchFromYouTube(searchQuery, category, pageToken, maxResults);
+      if (ytResult) {
+        cache.set(cacheKey, { data: ytResult, time: Date.now() });
+        return NextResponse.json(ytResult);
+      }
+    }
+
+    // Fallback: Piped API (free, no API key needed)
+    const pipedResult = await fetchFromPiped(searchQuery, category);
+    if (pipedResult && pipedResult.videos.length > 0) {
+      cache.set(cacheKey, { data: pipedResult, time: Date.now() });
+      return NextResponse.json(pipedResult);
+    }
+
+    // Last resort: database
+    const dbResult = await fallbackToDatabase(query.trim(), category);
+    return dbResult;
+  } catch (err) {
+    console.error('YouTube search route error:', err);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}
+
+// ─── YouTube Data API v3 ───
+async function fetchFromYouTube(searchQuery, category, pageToken, maxResults) {
+  try {
     const searchUrl = new URL(`${BASE_URL}/search`);
     searchUrl.searchParams.set('part', 'snippet');
     searchUrl.searchParams.set('type', 'video');
@@ -45,7 +97,7 @@ export async function GET(request) {
     searchUrl.searchParams.set('key', YOUTUBE_API_KEY);
     searchUrl.searchParams.set('relevanceLanguage', 'en');
     searchUrl.searchParams.set('safeSearch', 'strict');
-    searchUrl.searchParams.set('videoCategoryId', '27'); // Education category
+    searchUrl.searchParams.set('videoCategoryId', '27');
     if (pageToken) {
       searchUrl.searchParams.set('pageToken', pageToken);
     }
@@ -53,16 +105,18 @@ export async function GET(request) {
     const searchRes = await fetch(searchUrl.toString(), { next: { revalidate: 300 } });
     if (!searchRes.ok) {
       const errBody = await searchRes.json().catch(() => ({}));
-      console.error('YouTube search error:', errBody);
-      return NextResponse.json({ error: 'YouTube API error' }, { status: searchRes.status });
+      console.error('YouTube API error:', errBody);
+      if (searchRes.status === 403) {
+        quotaExhausted = true;
+        quotaExhaustedAt = Date.now();
+      }
+      return null;
     }
 
     const searchData = await searchRes.json();
     const videoIds = searchData.items?.map((item) => item.id.videoId).filter(Boolean) || [];
 
-    if (videoIds.length === 0) {
-      return NextResponse.json({ videos: [], nextPageToken: null });
-    }
+    if (videoIds.length === 0) return { videos: [], nextPageToken: null };
 
     const detailsUrl = new URL(`${BASE_URL}/videos`);
     detailsUrl.searchParams.set('part', 'snippet,contentDetails,statistics');
@@ -72,7 +126,6 @@ export async function GET(request) {
     const detailsRes = await fetch(detailsUrl.toString(), { next: { revalidate: 300 } });
     const detailsData = detailsRes.ok ? await detailsRes.json() : { items: [] };
 
-    // Build a map of video details
     const detailsMap = {};
     for (const item of detailsData.items || []) {
       detailsMap[item.id] = item;
@@ -99,12 +152,114 @@ export async function GET(request) {
       };
     });
 
-    return NextResponse.json({
-      videos,
-      nextPageToken: searchData.nextPageToken || null,
-    });
+    return { videos, nextPageToken: searchData.nextPageToken || null };
   } catch (err) {
-    console.error('YouTube search route error:', err);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    console.error('fetchFromYouTube error:', err);
+    return null;
+  }
+}
+
+// ─── Piped API (free YouTube mirror, no key needed) ───
+function formatPipedDuration(seconds) {
+  if (!seconds) return '';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h > 0) return `PT${h}H${m}M${s}S`;
+  return `PT${m}M${s}S`;
+}
+
+async function fetchFromPiped(searchQuery, category) {
+  for (const instance of PIPED_INSTANCES) {
+    try {
+      const url = `${instance}/search?q=${encodeURIComponent(searchQuery)}&filter=videos`;
+      const res = await fetch(url, {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(8000),
+      });
+
+      if (!res.ok) continue;
+
+      const data = await res.json();
+      const items = data.items || data;
+
+      if (!Array.isArray(items) || items.length === 0) continue;
+
+      const videos = items
+        .filter((item) => item.url || item.videoId)
+        .slice(0, 12)
+        .map((item) => {
+          const videoId = item.url
+            ? item.url.replace('/watch?v=', '')
+            : item.videoId || '';
+          return {
+            youtube_id: videoId,
+            title: item.title || '',
+            description: item.shortDescription || item.description || '',
+            channel_title: item.uploaderName || item.uploader || '',
+            thumbnail_url: item.thumbnail || '',
+            published_at: item.uploadedDate || item.uploaded
+              ? new Date(item.uploaded).toISOString()
+              : '',
+            duration: formatPipedDuration(item.duration),
+            view_count: item.views || 0,
+            like_count: 0,
+            category: category !== 'All' ? category : '',
+          };
+        });
+
+      if (videos.length > 0) {
+        console.log(`Piped fallback success via ${instance} — ${videos.length} results`);
+        return { videos, nextPageToken: null };
+      }
+    } catch (err) {
+      console.error(`Piped instance ${instance} failed:`, err.message);
+      continue;
+    }
+  }
+
+  return null;
+}
+
+// ─── Database fallback (last resort) ───
+async function fallbackToDatabase(searchQuery, category) {
+  try {
+    const supabase = createAdminSupabase();
+    let dbQuery = supabase
+      .from('videos')
+      .select('*')
+      .eq('status', 'approved')
+      .order('created_at', { ascending: false })
+      .limit(12);
+
+    if (category && category !== 'All') {
+      dbQuery = dbQuery.eq('category', category);
+    }
+
+    if (searchQuery) {
+      dbQuery = dbQuery.or(
+        `title.ilike.%${searchQuery}%,channel_title.ilike.%${searchQuery}%,description.ilike.%${searchQuery}%`
+      );
+    }
+
+    const { data: dbVideos } = await dbQuery;
+
+    const videos = (dbVideos || []).map((v) => ({
+      youtube_id: v.youtube_id,
+      title: v.title,
+      description: v.description || '',
+      channel_title: v.channel_title || '',
+      thumbnail_url: v.thumbnail_url || '',
+      published_at: v.created_at || '',
+      duration: v.duration || '',
+      view_count: v.view_count || 0,
+      like_count: 0,
+      category: v.category || '',
+    }));
+
+    return NextResponse.json({ videos, nextPageToken: null });
+  } catch (err) {
+    console.error('Database fallback error:', err);
+    return NextResponse.json({ videos: [], nextPageToken: null });
   }
 }

@@ -47,7 +47,7 @@ export function AuthProvider({ children }) {
     return () => subscription.unsubscribe();
   }, [supabase, fetchProfile]);
 
-  // Sign up
+  // Sign up with email + password
   const signUp = async (email, password, metadata = {}) => {
     const { data, error } = await supabase.auth.signUp({
       email,
@@ -58,9 +58,42 @@ export function AuthProvider({ children }) {
     return data;
   };
 
-  // Sign in
+  // Sign in with email + password
   const signIn = async (email, password) => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    if (data.user) await fetchProfile(data.user.id);
+    return data;
+  };
+
+  // Sign in with Google OAuth
+  const signInWithGoogle = async () => {
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/api/auth/callback`,
+      },
+    });
+    if (error) throw error;
+    return data;
+  };
+
+  // Send OTP to phone number
+  const sendPhoneOtp = async (phone) => {
+    const { data, error } = await supabase.auth.signInWithOtp({
+      phone,
+    });
+    if (error) throw error;
+    return data;
+  };
+
+  // Verify phone OTP
+  const verifyPhoneOtp = async (phone, token) => {
+    const { data, error } = await supabase.auth.verifyOtp({
+      phone,
+      token,
+      type: 'sms',
+    });
     if (error) throw error;
     if (data.user) await fetchProfile(data.user.id);
     return data;
@@ -98,6 +131,9 @@ export function AuthProvider({ children }) {
         isAdmin,
         signUp,
         signIn,
+        signInWithGoogle,
+        sendPhoneOtp,
+        verifyPhoneOtp,
         signOut,
         updateProfile,
         fetchProfile,

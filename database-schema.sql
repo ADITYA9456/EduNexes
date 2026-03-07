@@ -41,6 +41,7 @@ CREATE TABLE profiles (
   avatar_url TEXT,
   bio TEXT DEFAULT '',
   role TEXT DEFAULT 'user' CHECK (role IN ('user', 'admin', 'moderator')),
+  phone TEXT,
   total_points INTEGER DEFAULT 0,
   problems_solved INTEGER DEFAULT 0,
   current_streak INTEGER DEFAULT 0,
@@ -52,17 +53,45 @@ CREATE TABLE profiles (
   updated_at TIMESTAMPTZ DEFAULT now()
 );
 
--- Auto-create profile on signup
+-- Auto-create profile on signup (handles email, phone, and OAuth users)
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
+DECLARE
+  _username TEXT;
+  _full_name TEXT;
+  _avatar TEXT;
+  _phone TEXT;
 BEGIN
-  INSERT INTO public.profiles (id, username, full_name, avatar_url)
-  VALUES (
-    NEW.id,
-    COALESCE(NEW.raw_user_meta_data->>'username', split_part(NEW.email, '@', 1)),
-    COALESCE(NEW.raw_user_meta_data->>'full_name', split_part(NEW.email, '@', 1)),
-    COALESCE(NEW.raw_user_meta_data->>'avatar_url', '')
+  -- Determine username: metadata > email prefix > phone > random
+  _username := COALESCE(
+    NULLIF(NEW.raw_user_meta_data->>'username', ''),
+    NULLIF(NEW.raw_user_meta_data->>'preferred_username', ''),
+    CASE WHEN NEW.email IS NOT NULL AND NEW.email != '' THEN split_part(NEW.email, '@', 1) END,
+    CASE WHEN NEW.phone IS NOT NULL AND NEW.phone != '' THEN 'user_' || RIGHT(NEW.phone, 4) END,
+    'user_' || LEFT(NEW.id::text, 8)
   );
+
+  -- Determine full name: metadata > name from Google > email prefix > phone
+  _full_name := COALESCE(
+    NULLIF(NEW.raw_user_meta_data->>'full_name', ''),
+    NULLIF(NEW.raw_user_meta_data->>'name', ''),
+    CASE WHEN NEW.email IS NOT NULL AND NEW.email != '' THEN split_part(NEW.email, '@', 1) END,
+    _username
+  );
+
+  -- Avatar URL from metadata (Google provides 'avatar_url' or 'picture')
+  _avatar := COALESCE(
+    NULLIF(NEW.raw_user_meta_data->>'avatar_url', ''),
+    NULLIF(NEW.raw_user_meta_data->>'picture', ''),
+    ''
+  );
+
+  -- Phone from auth record
+  _phone := COALESCE(NEW.phone, '');
+
+  INSERT INTO public.profiles (id, username, full_name, avatar_url, phone)
+  VALUES (NEW.id, _username, _full_name, _avatar, _phone);
+
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
