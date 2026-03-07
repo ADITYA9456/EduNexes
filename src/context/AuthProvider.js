@@ -102,13 +102,14 @@ export function AuthProvider({ children }) {
   // Sign out
   const signOut = async () => {
     try {
-      await supabase.auth.signOut({ scope: 'global' });
+      await supabase.auth.signOut({ scope: 'local' });
     } catch (err) {
-      console.error('Sign out error:', err);
-    } finally {
-      setUser(null);
-      setProfile(null);
+      // ignore
     }
+    setUser(null);
+    setProfile(null);
+    // Hard redirect to server signout route — clears cookies + redirects to /login
+    window.location.href = '/api/auth/signout';
   };
 
   // Update profile

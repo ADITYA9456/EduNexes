@@ -43,10 +43,9 @@ export default function Header({ onToggleSidebar }) {
     }
   };
 
-  const handleLogout = async () => {
+  const handleLogout = () => {
     setDropdownOpen(false);
-    await signOut();
-    window.location.href = '/login';
+    signOut();
   };
 
   const initials = profile?.full_name

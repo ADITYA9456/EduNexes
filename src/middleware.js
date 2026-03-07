@@ -1,6 +1,13 @@
 import { updateSession } from '@/lib/supabase/middleware';
 
 export async function middleware(request) {
+  const path = request.nextUrl.pathname;
+
+  // Skip middleware for signout — never refresh session during signout
+  if (path.startsWith('/api/auth/signout')) {
+    return;
+  }
+
   return await updateSession(request);
 }
 
