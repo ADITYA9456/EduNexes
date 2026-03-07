@@ -29,6 +29,9 @@ export default function HomePage() {
   const pageRef = useRef(0);
   // Track seen video IDs to avoid duplicates across pages
   const seenIdsRef = useRef(new Set());
+  // Track consecutive empty (all-duplicate) fetches to stop runaway scrolling
+  const emptyFetchCount = useRef(0);
+  const MAX_EMPTY_FETCHES = 3;
 
   const fetchVideos = useCallback(async (reset = false, pageToken = '') => {
     if (fetchingRef.current) return;
@@ -38,6 +41,7 @@ export default function HomePage() {
       setLoading(true);
       pageRef.current = 0;
       seenIdsRef.current = new Set();
+      emptyFetchCount.current = 0;
     } else {
       setLoadingMore(true);
     }
@@ -71,9 +75,16 @@ export default function HomePage() {
           return true;
         });
 
-        setVideos(reset ? newVideos : (prev) => [...prev, ...newVideos]);
+        if (newVideos.length > 0) {
+          setVideos(reset ? newVideos : (prev) => [...prev, ...newVideos]);
+          emptyFetchCount.current = 0;
+        } else {
+          emptyFetchCount.current += 1;
+        }
         setNextPageToken(data.nextPageToken || null);
-        setHasMore(!!data.nextPageToken && newVideos.length > 0);
+        // Keep scrolling as long as server says there's more, even if this batch was all dupes
+        // But stop after MAX_EMPTY_FETCHES consecutive all-duplicate batches
+        setHasMore(!!data.nextPageToken && emptyFetchCount.current < MAX_EMPTY_FETCHES);
         setError(null);
         pageRef.current += 1;
 

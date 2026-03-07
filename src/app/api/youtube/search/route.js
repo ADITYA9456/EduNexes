@@ -10,19 +10,16 @@ const YOUTUBE_API_KEYS = (process.env.YOUTUBE_API_KEY || '')
   .filter(Boolean);
 const BASE_URL = 'https://www.googleapis.com/youtube/v3';
 
-// Free API instances (fallback when YouTube quota exceeded) — multiple for redundancy
+// Free API instances (fallback when YouTube quota exceeded)
+// Only keep instances that are known to work reliably
 const PIPED_INSTANCES = [
   'https://pipedapi.kavin.rocks',
-  'https://pipedapi.r4fo.com',
   'https://pipedapi.leptons.xyz',
-  'https://pipedapi.adminforge.de',
 ];
 const INVIDIOUS_INSTANCES = [
-  'https://vid.puffyan.us',
-  'https://invidious.snopyta.org',
   'https://invidious.materialio.us',
-  'https://invidious.privacyredirect.com',
   'https://inv.nadeko.net',
+  'https://invidious.privacyredirect.com',
 ];
 
 // Curated fallback videos when ALL APIs fail (verified working YouTube IDs)
@@ -141,17 +138,19 @@ export async function GET(request) {
     }
 
     // Fallback: Try ALL Piped and Invidious instances concurrently
-    // Use page number to vary query for pseudo-pagination
-    const fallbackQuery = page > 0
-      ? `${searchQuery} ${getPageVariation(category, page)}`
-      : searchQuery;
+    // Each page uses a different query from the category list for variety
+    const queryIndex = page % (CATEGORY_QUERIES[category] || CATEGORY_QUERIES.All).length;
+    const queries = CATEGORY_QUERIES[category] || CATEGORY_QUERIES.All;
+    const fallbackQuery = isUserSearch ? searchQuery : queries[queryIndex];
+    // Invidious supports native pagination via page param
+    const invidiousPage = Math.floor(page / queries.length) + 1;
 
     try {
       const pipedPromises = PIPED_INSTANCES.map((inst) =>
         fetchFromPiped(inst, fallbackQuery, category).catch(() => null)
       );
       const invidiousPromises = INVIDIOUS_INSTANCES.map((inst) =>
-        fetchFromInvidious(inst, fallbackQuery, category).catch(() => null)
+        fetchFromInvidious(inst, fallbackQuery, category, invidiousPage).catch(() => null)
       );
 
       const allResults = await Promise.allSettled([...pipedPromises, ...invidiousPromises]);
@@ -160,7 +159,7 @@ export async function GET(request) {
         if (result.status === 'fulfilled' && result.value && result.value.videos?.length > 0) {
           const data = result.value;
           if (!isUserSearch) data.videos = shuffleArray(data.videos);
-          // Enable infinite scroll by always providing a next page
+          // Always provide next page token for infinite scroll
           data.nextPageToken = `fallback_page_${page + 1}`;
           return NextResponse.json(data);
         }
@@ -382,11 +381,11 @@ async function fetchFromPiped(instance, searchQuery, category) {
 }
 
 // ─── Invidious API (another free YouTube mirror) ───
-async function fetchFromInvidious(instance, searchQuery, category) {
+async function fetchFromInvidious(instance, searchQuery, category, page = 1) {
   try {
     const sortOptions = ['relevance', 'date', 'views'];
     const sort = sortOptions[Math.floor(Math.random() * sortOptions.length)];
-    const url = `${instance}/api/v1/search?q=${encodeURIComponent(searchQuery)}&type=video&sort_by=${sort}`;
+    const url = `${instance}/api/v1/search?q=${encodeURIComponent(searchQuery)}&type=video&sort_by=${sort}&page=${page}`;
     const res = await fetchWithTimeout(url, 6000);
 
     if (!res.ok) return null;
