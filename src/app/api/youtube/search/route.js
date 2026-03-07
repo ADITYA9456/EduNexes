@@ -4,11 +4,18 @@ import { NextResponse } from 'next/server';
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
 const BASE_URL = 'https://www.googleapis.com/youtube/v3';
 
-// Free Piped API instances (fallback when YouTube quota exceeded)
+// Free API instances (fallback when YouTube quota exceeded)
 const PIPED_INSTANCES = [
   'https://pipedapi.kavin.rocks',
   'https://pipedapi.adminforge.de',
   'https://pipedapi.in.projectsegfau.lt',
+  'https://pipedapi.leptons.xyz',
+];
+const INVIDIOUS_INSTANCES = [
+  'https://inv.nadeko.net',
+  'https://invidious.nerdvpn.de',
+  'https://invidious.privacyredirect.com',
+  'https://vid.puffyan.us',
 ];
 
 // In-memory cache to reduce YouTube API quota usage
@@ -70,11 +77,18 @@ export async function GET(request) {
       }
     }
 
-    // Fallback: Piped API (free, no API key needed)
+    // Fallback 1: Piped API (free, no API key needed)
     const pipedResult = await fetchFromPiped(searchQuery, category);
     if (pipedResult && pipedResult.videos.length > 0) {
       cache.set(cacheKey, { data: pipedResult, time: Date.now() });
       return NextResponse.json(pipedResult);
+    }
+
+    // Fallback 2: Invidious API (another free YouTube mirror)
+    const invResult = await fetchFromInvidious(searchQuery, category);
+    if (invResult && invResult.videos.length > 0) {
+      cache.set(cacheKey, { data: invResult, time: Date.now() });
+      return NextResponse.json(invResult);
     }
 
     // Last resort: database
@@ -169,14 +183,34 @@ function formatPipedDuration(seconds) {
   return `PT${m}M${s}S`;
 }
 
+function safeDateString(uploaded) {
+  try {
+    if (typeof uploaded === 'number' && uploaded > 0) {
+      return new Date(uploaded).toISOString();
+    }
+  } catch { /* ignore */ }
+  return '';
+}
+
+async function fetchWithTimeout(url, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    });
+    return res;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchFromPiped(searchQuery, category) {
   for (const instance of PIPED_INSTANCES) {
     try {
       const url = `${instance}/search?q=${encodeURIComponent(searchQuery)}&filter=videos`;
-      const res = await fetch(url, {
-        headers: { Accept: 'application/json' },
-        signal: AbortSignal.timeout(8000),
-      });
+      const res = await fetchWithTimeout(url, 8000);
 
       if (!res.ok) continue;
 
@@ -198,9 +232,7 @@ async function fetchFromPiped(searchQuery, category) {
             description: item.shortDescription || item.description || '',
             channel_title: item.uploaderName || item.uploader || '',
             thumbnail_url: item.thumbnail || '',
-            published_at: item.uploadedDate || item.uploaded
-              ? new Date(item.uploaded).toISOString()
-              : '',
+            published_at: safeDateString(item.uploaded) || item.uploadedDate || '',
             duration: formatPipedDuration(item.duration),
             view_count: item.views || 0,
             like_count: 0,
@@ -214,6 +246,48 @@ async function fetchFromPiped(searchQuery, category) {
       }
     } catch (err) {
       console.error(`Piped instance ${instance} failed:`, err.message);
+      continue;
+    }
+  }
+
+  return null;
+}
+
+// ─── Invidious API (another free YouTube mirror) ───
+async function fetchFromInvidious(searchQuery, category) {
+  for (const instance of INVIDIOUS_INSTANCES) {
+    try {
+      const url = `${instance}/api/v1/search?q=${encodeURIComponent(searchQuery)}&type=video&sort_by=relevance`;
+      const res = await fetchWithTimeout(url, 8000);
+
+      if (!res.ok) continue;
+
+      const items = await res.json();
+
+      if (!Array.isArray(items) || items.length === 0) continue;
+
+      const videos = items
+        .filter((item) => item.type === 'video' && item.videoId)
+        .slice(0, 12)
+        .map((item) => ({
+          youtube_id: item.videoId,
+          title: item.title || '',
+          description: item.description || item.descriptionHtml || '',
+          channel_title: item.author || '',
+          thumbnail_url: item.videoThumbnails?.[0]?.url || '',
+          published_at: item.published ? new Date(item.published * 1000).toISOString() : '',
+          duration: formatPipedDuration(item.lengthSeconds),
+          view_count: item.viewCount || 0,
+          like_count: 0,
+          category: category !== 'All' ? category : '',
+        }));
+
+      if (videos.length > 0) {
+        console.log(`Invidious fallback success via ${instance} — ${videos.length} results`);
+        return { videos, nextPageToken: null };
+      }
+    } catch (err) {
+      console.error(`Invidious instance ${instance} failed:`, err.message);
       continue;
     }
   }
