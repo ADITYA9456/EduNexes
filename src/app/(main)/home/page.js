@@ -23,6 +23,8 @@ export default function HomePage() {
 
   // Ref for infinite scroll sentinel
   const sentinelRef = useRef(null);
+  // Ref for the .vlist scroll container
+  const scrollContainerRef = useRef(null);
   // Prevent duplicate fetches
   const fetchingRef = useRef(false);
   // Track page number for fallback pagination
@@ -115,10 +117,11 @@ export default function HomePage() {
     fetchVideos(true);
   }, [category, searchQuery, fetchVideos]);
 
-  // Infinite scroll with IntersectionObserver
+  // Infinite scroll with IntersectionObserver + fallback scroll listener
   useEffect(() => {
     const sentinel = sentinelRef.current;
-    if (!sentinel) return;
+    const scrollContainer = scrollContainerRef.current;
+    if (!sentinel || !scrollContainer) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
@@ -127,13 +130,28 @@ export default function HomePage() {
         }
       },
       {
-        root: null,
+        root: scrollContainer,
         rootMargin: '600px',
       }
     );
 
     observer.observe(sentinel);
-    return () => observer.disconnect();
+
+    // Fallback: scroll event on the .vlist container in case IntersectionObserver misses
+    const handleScroll = () => {
+      if (!hasMore || fetchingRef.current || !nextPageToken) return;
+      const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
+      if (scrollHeight - scrollTop - clientHeight < 800) {
+        fetchVideos(false, nextPageToken);
+      }
+    };
+
+    scrollContainer.addEventListener('scroll', handleScroll, { passive: true });
+
+    return () => {
+      observer.disconnect();
+      scrollContainer.removeEventListener('scroll', handleScroll);
+    };
   }, [hasMore, nextPageToken, fetchVideos]);
 
   const handleCategoryChange = (cat) => {
@@ -162,7 +180,7 @@ export default function HomePage() {
       {/* Split Layout: Video List + AI Summary */}
       <div className="home-split" style={{ marginTop: 'var(--space-lg)' }}>
         {/* Video List */}
-        <div className="vlist">
+        <div className="vlist" ref={scrollContainerRef}>
           {loading && videos.length === 0 ? (
             Array.from({ length: 6 }).map((_, i) => (
               <VideoListItemSkeleton key={i} />
