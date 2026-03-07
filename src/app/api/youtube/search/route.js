@@ -38,9 +38,12 @@ const CURATED_VIDEOS = [
   { youtube_id: 'fqMOX6JJhGo', title: 'Docker Tutorial for Beginners', channel_title: 'TechWorld with Nana', thumbnail_url: 'https://i.ytimg.com/vi/fqMOX6JJhGo/hqdefault.jpg', duration: 'PT2H46M', view_count: 2500000, category: 'DevOps' },
 ];
 
-// Track exhausted API keys individually
-const exhaustedKeys = new Map(); // key -> timestamp
-const QUOTA_COOLDOWN = 60 * 60 * 1000; // 1 hour
+// Track exhausted API keys individually — use globalThis to survive hot reloads in dev
+if (!globalThis.__ytExhaustedKeys) {
+  globalThis.__ytExhaustedKeys = new Map();
+}
+const exhaustedKeys = globalThis.__ytExhaustedKeys;
+const QUOTA_COOLDOWN = 24 * 60 * 60 * 1000; // 24 hours (YouTube quota resets daily at midnight PT)
 
 function getWorkingApiKey() {
   const now = Date.now();
@@ -235,10 +238,12 @@ async function fetchFromYouTube(apiKey, searchQuery, category, pageToken, maxRes
       clearTimeout(ytTimer);
     }
     if (!searchRes.ok) {
-      const errBody = await searchRes.json().catch(() => ({}));
-      console.error('YouTube API error:', errBody);
       if (searchRes.status === 403) {
+        // Quota exceeded — silently mark key and skip to fallbacks
         markKeyExhausted(apiKey);
+      } else {
+        const errBody = await searchRes.json().catch(() => ({}));
+        console.error('YouTube API error:', searchRes.status, errBody);
       }
       return null;
     }
