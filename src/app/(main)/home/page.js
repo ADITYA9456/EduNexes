@@ -20,8 +20,6 @@ export default function HomePage() {
   const sentinelRef = useRef(null);
   // Prevent duplicate fetches
   const fetchingRef = useRef(false);
-  // Scroll container ref
-  const scrollContainerRef = useRef(null);
 
   const fetchVideos = useCallback(async (reset = false, pageToken = '') => {
     if (fetchingRef.current) return;
@@ -72,11 +70,6 @@ export default function HomePage() {
     const sentinel = sentinelRef.current;
     if (!sentinel) return;
 
-    // Find the actual scroll container (.layout__content)
-    if (!scrollContainerRef.current) {
-      scrollContainerRef.current = sentinel.closest('.layout__content') || null;
-    }
-
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting && hasMore && !fetchingRef.current && nextPageToken) {
@@ -84,7 +77,7 @@ export default function HomePage() {
         }
       },
       {
-        root: scrollContainerRef.current,
+        root: null,
         rootMargin: '600px',
       }
     );

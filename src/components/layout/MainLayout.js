@@ -12,7 +12,7 @@ export default function MainLayout({ children }) {
       <Header onToggleSidebar={() => setSidebarOpen((p) => !p)} />
       <div className="layout__body">
         <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
-        <main className="layout__content">
+        <main className={`layout__content ${sidebarOpen ? 'layout__content--sidebar-open' : ''}`}>
           {children}
         </main>
       </div>
