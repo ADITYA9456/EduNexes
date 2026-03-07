@@ -19,6 +19,7 @@ export default function HomePage() {
   const [nextPageToken, setNextPageToken] = useState(null);
   const [hasMore, setHasMore] = useState(true);
   const [selectedVideo, setSelectedVideo] = useState(null);
+  const [error, setError] = useState(null);
 
   // Ref for infinite scroll sentinel
   const sentinelRef = useRef(null);
@@ -41,13 +42,24 @@ export default function HomePage() {
       if (category && category !== 'All') params.set('category', category);
       if (pageToken) params.set('pageToken', pageToken);
 
-      const res = await fetch(`/api/youtube/search?${params.toString()}`, { cache: 'no-store' });
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15000);
+      let res;
+      try {
+        res = await fetch(`/api/youtube/search?${params.toString()}`, {
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
       const data = await res.json();
 
       if (res.ok && data.videos) {
         setVideos(reset ? data.videos : (prev) => [...prev, ...data.videos]);
         setNextPageToken(data.nextPageToken || null);
         setHasMore(!!data.nextPageToken);
+        setError(null);
         // Auto-select first video on fresh load
         if (reset && data.videos.length > 0) {
           setSelectedVideo(data.videos[0]);
@@ -59,6 +71,7 @@ export default function HomePage() {
     } catch {
       if (reset) setVideos([]);
       setHasMore(false);
+      setError('Failed to load videos. Please try again.');
     } finally {
       setLoading(false);
       setLoadingMore(false);
@@ -126,6 +139,17 @@ export default function HomePage() {
             Array.from({ length: 6 }).map((_, i) => (
               <VideoListItemSkeleton key={i} />
             ))
+          ) : error && videos.length === 0 ? (
+            <div className="loading-container" style={{ minHeight: 200, textAlign: 'center' }}>
+              <p className="text-muted">{error}</p>
+              <button
+                className="btn btn--primary"
+                style={{ marginTop: 'var(--space-md)' }}
+                onClick={() => { setError(null); fetchVideos(true); }}
+              >
+                Retry
+              </button>
+            </div>
           ) : videos.length === 0 ? (
             <div className="loading-container" style={{ minHeight: 200 }}>
               <p className="text-muted">No videos found</p>

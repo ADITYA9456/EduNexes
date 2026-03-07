@@ -110,22 +110,23 @@ export async function GET(request) {
       }
     }
 
-    // Fallback 1: Piped API (free, no API key needed)
-    const pipedResult = await fetchFromPiped(searchQuery, category);
-    if (pipedResult && pipedResult.videos.length > 0) {
-      if (!isUserSearch) {
-        pipedResult.videos = shuffleArray(pipedResult.videos);
-      }
-      return NextResponse.json(pipedResult);
-    }
+    // Fallback: Try Piped and Invidious concurrently (race for fastest)
+    try {
+      const fallbackResults = await Promise.allSettled([
+        fetchFromPiped(searchQuery, category),
+        fetchFromInvidious(searchQuery, category),
+      ]);
 
-    // Fallback 2: Invidious API (another free YouTube mirror)
-    const invResult = await fetchFromInvidious(searchQuery, category);
-    if (invResult && invResult.videos.length > 0) {
-      if (!isUserSearch) {
-        invResult.videos = shuffleArray(invResult.videos);
+      for (const result of fallbackResults) {
+        if (result.status === 'fulfilled' && result.value && result.value.videos?.length > 0) {
+          if (!isUserSearch) {
+            result.value.videos = shuffleArray(result.value.videos);
+          }
+          return NextResponse.json(result.value);
+        }
       }
-      return NextResponse.json(invResult);
+    } catch (e) {
+      console.error('Fallback APIs error:', e.message);
     }
 
     // Last resort: database
@@ -153,7 +154,17 @@ async function fetchFromYouTube(searchQuery, category, pageToken, maxResults, se
       searchUrl.searchParams.set('pageToken', pageToken);
     }
 
-    const searchRes = await fetch(searchUrl.toString(), { cache: 'no-store' });
+    const ytController = new AbortController();
+    const ytTimer = setTimeout(() => ytController.abort(), 5000);
+    let searchRes;
+    try {
+      searchRes = await fetch(searchUrl.toString(), { cache: 'no-store', signal: ytController.signal });
+    } catch (e) {
+      console.error('YouTube API timeout/network error:', e.message);
+      return null;
+    } finally {
+      clearTimeout(ytTimer);
+    }
     if (!searchRes.ok) {
       const errBody = await searchRes.json().catch(() => ({}));
       console.error('YouTube API error:', errBody);
@@ -174,8 +185,17 @@ async function fetchFromYouTube(searchQuery, category, pageToken, maxResults, se
     detailsUrl.searchParams.set('id', videoIds.join(','));
     detailsUrl.searchParams.set('key', YOUTUBE_API_KEY);
 
-    const detailsRes = await fetch(detailsUrl.toString(), { cache: 'no-store' });
-    const detailsData = detailsRes.ok ? await detailsRes.json() : { items: [] };
+    const detController = new AbortController();
+    const detTimer = setTimeout(() => detController.abort(), 5000);
+    let detailsRes;
+    try {
+      detailsRes = await fetch(detailsUrl.toString(), { cache: 'no-store', signal: detController.signal });
+    } catch {
+      detailsRes = null;
+    } finally {
+      clearTimeout(detTimer);
+    }
+    const detailsData = detailsRes?.ok ? await detailsRes.json() : { items: [] };
 
     const detailsMap = {};
     for (const item of detailsData.items || []) {
@@ -229,13 +249,14 @@ function safeDateString(uploaded) {
   return '';
 }
 
-async function fetchWithTimeout(url, timeoutMs = 8000) {
+async function fetchWithTimeout(url, timeoutMs = 4000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       headers: { Accept: 'application/json' },
       signal: controller.signal,
+      cache: 'no-store',
     });
     return res;
   } finally {
@@ -244,10 +265,11 @@ async function fetchWithTimeout(url, timeoutMs = 8000) {
 }
 
 async function fetchFromPiped(searchQuery, category) {
-  for (const instance of PIPED_INSTANCES) {
+  // Only try first 2 instances to stay within timeout budget
+  for (const instance of PIPED_INSTANCES.slice(0, 2)) {
     try {
       const url = `${instance}/search?q=${encodeURIComponent(searchQuery)}&filter=videos`;
-      const res = await fetchWithTimeout(url, 8000);
+      const res = await fetchWithTimeout(url, 4000);
 
       if (!res.ok) continue;
 
@@ -292,12 +314,13 @@ async function fetchFromPiped(searchQuery, category) {
 
 // ─── Invidious API (another free YouTube mirror) ───
 async function fetchFromInvidious(searchQuery, category) {
-  for (const instance of INVIDIOUS_INSTANCES) {
+  // Only try first 2 instances to stay within timeout budget
+  for (const instance of INVIDIOUS_INSTANCES.slice(0, 2)) {
     try {
       const sortOptions = ['relevance', 'date', 'views'];
       const sort = sortOptions[Math.floor(Math.random() * sortOptions.length)];
       const url = `${instance}/api/v1/search?q=${encodeURIComponent(searchQuery)}&type=video&sort_by=${sort}`;
-      const res = await fetchWithTimeout(url, 8000);
+      const res = await fetchWithTimeout(url, 4000);
 
       if (!res.ok) continue;
 

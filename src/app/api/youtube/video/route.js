@@ -24,7 +24,16 @@ export async function GET(request) {
     videoUrl.searchParams.set('id', id);
     videoUrl.searchParams.set('key', YOUTUBE_API_KEY);
 
-    const videoRes = await fetch(videoUrl.toString(), { cache: 'no-store' });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    let videoRes;
+    try {
+      videoRes = await fetch(videoUrl.toString(), { cache: 'no-store', signal: controller.signal });
+    } catch (e) {
+      return NextResponse.json({ error: 'YouTube API timeout' }, { status: 504 });
+    } finally {
+      clearTimeout(timer);
+    }
     if (!videoRes.ok) {
       return NextResponse.json({ error: 'YouTube API error' }, { status: videoRes.status });
     }
@@ -63,10 +72,19 @@ export async function GET(request) {
     relatedUrl.searchParams.set('key', YOUTUBE_API_KEY);
     relatedUrl.searchParams.set('safeSearch', 'strict');
 
-    const relatedRes = await fetch(relatedUrl.toString(), { cache: 'no-store' });
+    const relController = new AbortController();
+    const relTimer = setTimeout(() => relController.abort(), 5000);
+    let relatedRes;
+    try {
+      relatedRes = await fetch(relatedUrl.toString(), { cache: 'no-store', signal: relController.signal });
+    } catch {
+      relatedRes = null;
+    } finally {
+      clearTimeout(relTimer);
+    }
     let relatedVideos = [];
 
-    if (relatedRes.ok) {
+    if (relatedRes?.ok) {
       const relatedData = await relatedRes.json();
       const relIds = relatedData.items
         ?.map((i) => i.id?.videoId)
@@ -79,8 +97,17 @@ export async function GET(request) {
         relDetailsUrl.searchParams.set('id', relIds.join(','));
         relDetailsUrl.searchParams.set('key', YOUTUBE_API_KEY);
 
-        const relDetailsRes = await fetch(relDetailsUrl.toString(), { cache: 'no-store' });
-        if (relDetailsRes.ok) {
+        const detController = new AbortController();
+        const detTimer = setTimeout(() => detController.abort(), 5000);
+        let relDetailsRes;
+        try {
+          relDetailsRes = await fetch(relDetailsUrl.toString(), { cache: 'no-store', signal: detController.signal });
+        } catch {
+          relDetailsRes = null;
+        } finally {
+          clearTimeout(detTimer);
+        }
+        if (relDetailsRes?.ok) {
           const relDetailsData = await relDetailsRes.json();
           relatedVideos = (relDetailsData.items || []).map((r) => ({
             youtube_id: r.id,
