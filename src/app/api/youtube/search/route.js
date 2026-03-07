@@ -1,6 +1,8 @@
 import { createAdminSupabase } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 
+export const dynamic = 'force-dynamic';
+
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
 const BASE_URL = 'https://www.googleapis.com/youtube/v3';
 
@@ -18,28 +20,54 @@ const INVIDIOUS_INSTANCES = [
   'https://vid.puffyan.us',
 ];
 
-// In-memory cache to reduce YouTube API quota usage
-const cache = new Map();
-const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
 // Track if YouTube quota is exhausted to skip it and go straight to Piped
 let quotaExhausted = false;
 let quotaExhaustedAt = 0;
 const QUOTA_COOLDOWN = 60 * 60 * 1000; // 1 hour
 
+// Multiple query variations per category for variety
 const CATEGORY_QUERIES = {
-  All: 'programming tutorial OR coding tutorial OR computer science',
-  Programming: 'programming tutorial',
-  'Web Development': 'web development tutorial',
-  'Data Science': 'data science tutorial',
-  'Machine Learning': 'machine learning tutorial',
-  Mathematics: 'mathematics lecture',
-  Science: 'science education',
-  DSA: 'data structures and algorithms',
-  'System Design': 'system design interview',
-  DevOps: 'devops tutorial',
-  Design: 'UI UX design tutorial',
-  Business: 'business education',
+  All: [
+    'programming tutorial 2024',
+    'coding tutorial for beginners',
+    'computer science explained',
+    'learn to code',
+    'software engineering tutorial',
+    'programming projects',
+    'coding challenges explained',
+    'tech tutorials',
+  ],
+  Programming: ['programming tutorial', 'learn programming', 'coding basics'],
+  'Web Development': ['web development tutorial', 'frontend development', 'fullstack project'],
+  'Data Science': ['data science tutorial', 'data analysis python', 'data science project'],
+  'Machine Learning': ['machine learning tutorial', 'deep learning explained', 'AI projects'],
+  Mathematics: ['mathematics lecture', 'math for programmers', 'discrete mathematics'],
+  Science: ['science education', 'physics explained', 'science documentary'],
+  DSA: ['data structures and algorithms', 'DSA tutorial', 'leetcode explained'],
+  'System Design': ['system design interview', 'system architecture', 'scalable systems'],
+  DevOps: ['devops tutorial', 'docker kubernetes', 'CI CD pipeline'],
+  Design: ['UI UX design tutorial', 'web design', 'figma tutorial'],
+  Business: ['business education', 'startup lessons', 'entrepreneurship'],
 };
+
+// Pick a random query from the category's list
+function getRandomQuery(category) {
+  const queries = CATEGORY_QUERIES[category] || CATEGORY_QUERIES.All;
+  return queries[Math.floor(Math.random() * queries.length)];
+}
+
+// Shuffle array (Fisher-Yates) for result variety
+function shuffleArray(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// YouTube search order options for variety
+const SEARCH_ORDERS = ['relevance', 'date', 'viewCount'];
 
 export async function GET(request) {
   try {
@@ -49,19 +77,21 @@ export async function GET(request) {
     const pageToken = searchParams.get('pageToken') || '';
     const maxResults = 12;
 
+    // For explicit user searches, use the query as-is
+    // For default browsing (no query), pick a random query for variety
     let searchQuery = query.trim();
+    const isUserSearch = !!searchQuery;
+    
     if (!searchQuery) {
-      searchQuery = CATEGORY_QUERIES[category] || CATEGORY_QUERIES.All;
+      searchQuery = getRandomQuery(category);
     } else if (category && category !== 'All') {
       searchQuery = `${searchQuery} ${category}`;
     }
 
-    // Check cache first
-    const cacheKey = `${searchQuery}|${pageToken}`;
-    const cached = cache.get(cacheKey);
-    if (cached && Date.now() - cached.time < CACHE_TTL) {
-      return NextResponse.json(cached.data);
-    }
+    // Pick a random search order for non-user searches
+    const searchOrder = isUserSearch
+      ? 'relevance'
+      : SEARCH_ORDERS[Math.floor(Math.random() * SEARCH_ORDERS.length)];
 
     // Reset quota flag after cooldown
     if (quotaExhausted && Date.now() - quotaExhaustedAt > QUOTA_COOLDOWN) {
@@ -70,9 +100,12 @@ export async function GET(request) {
 
     // Try YouTube API first (if quota not exhausted and key exists)
     if (YOUTUBE_API_KEY && !quotaExhausted) {
-      const ytResult = await fetchFromYouTube(searchQuery, category, pageToken, maxResults);
-      if (ytResult) {
-        cache.set(cacheKey, { data: ytResult, time: Date.now() });
+      const ytResult = await fetchFromYouTube(searchQuery, category, pageToken, maxResults, searchOrder);
+      if (ytResult && ytResult.videos.length > 0) {
+        // Shuffle results for non-user searches to add variety
+        if (!isUserSearch) {
+          ytResult.videos = shuffleArray(ytResult.videos);
+        }
         return NextResponse.json(ytResult);
       }
     }
@@ -80,14 +113,18 @@ export async function GET(request) {
     // Fallback 1: Piped API (free, no API key needed)
     const pipedResult = await fetchFromPiped(searchQuery, category);
     if (pipedResult && pipedResult.videos.length > 0) {
-      cache.set(cacheKey, { data: pipedResult, time: Date.now() });
+      if (!isUserSearch) {
+        pipedResult.videos = shuffleArray(pipedResult.videos);
+      }
       return NextResponse.json(pipedResult);
     }
 
     // Fallback 2: Invidious API (another free YouTube mirror)
     const invResult = await fetchFromInvidious(searchQuery, category);
     if (invResult && invResult.videos.length > 0) {
-      cache.set(cacheKey, { data: invResult, time: Date.now() });
+      if (!isUserSearch) {
+        invResult.videos = shuffleArray(invResult.videos);
+      }
       return NextResponse.json(invResult);
     }
 
@@ -101,7 +138,7 @@ export async function GET(request) {
 }
 
 // ─── YouTube Data API v3 ───
-async function fetchFromYouTube(searchQuery, category, pageToken, maxResults) {
+async function fetchFromYouTube(searchQuery, category, pageToken, maxResults, searchOrder = 'relevance') {
   try {
     const searchUrl = new URL(`${BASE_URL}/search`);
     searchUrl.searchParams.set('part', 'snippet');
@@ -111,12 +148,12 @@ async function fetchFromYouTube(searchQuery, category, pageToken, maxResults) {
     searchUrl.searchParams.set('key', YOUTUBE_API_KEY);
     searchUrl.searchParams.set('relevanceLanguage', 'en');
     searchUrl.searchParams.set('safeSearch', 'strict');
-    searchUrl.searchParams.set('videoCategoryId', '27');
+    searchUrl.searchParams.set('order', searchOrder);
     if (pageToken) {
       searchUrl.searchParams.set('pageToken', pageToken);
     }
 
-    const searchRes = await fetch(searchUrl.toString(), { next: { revalidate: 300 } });
+    const searchRes = await fetch(searchUrl.toString(), { cache: 'no-store' });
     if (!searchRes.ok) {
       const errBody = await searchRes.json().catch(() => ({}));
       console.error('YouTube API error:', errBody);
@@ -137,7 +174,7 @@ async function fetchFromYouTube(searchQuery, category, pageToken, maxResults) {
     detailsUrl.searchParams.set('id', videoIds.join(','));
     detailsUrl.searchParams.set('key', YOUTUBE_API_KEY);
 
-    const detailsRes = await fetch(detailsUrl.toString(), { next: { revalidate: 300 } });
+    const detailsRes = await fetch(detailsUrl.toString(), { cache: 'no-store' });
     const detailsData = detailsRes.ok ? await detailsRes.json() : { items: [] };
 
     const detailsMap = {};
@@ -257,7 +294,9 @@ async function fetchFromPiped(searchQuery, category) {
 async function fetchFromInvidious(searchQuery, category) {
   for (const instance of INVIDIOUS_INSTANCES) {
     try {
-      const url = `${instance}/api/v1/search?q=${encodeURIComponent(searchQuery)}&type=video&sort_by=relevance`;
+      const sortOptions = ['relevance', 'date', 'views'];
+      const sort = sortOptions[Math.floor(Math.random() * sortOptions.length)];
+      const url = `${instance}/api/v1/search?q=${encodeURIComponent(searchQuery)}&type=video&sort_by=${sort}`;
       const res = await fetchWithTimeout(url, 8000);
 
       if (!res.ok) continue;

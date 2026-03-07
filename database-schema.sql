@@ -472,8 +472,3 @@ ON CONFLICT (slug) DO UPDATE SET
 -- MCQ answers
 UPDATE coding_problems SET mcq_options='["3","4","Error","None"]'::jsonb, correct_answer='4' WHERE slug='python-data-types-mcq';
 UPDATE coding_problems SET mcq_options='["0, 1, 2","3, 3, 3","undefined, undefined, undefined","0, 0, 0"]'::jsonb, correct_answer='3, 3, 3' WHERE slug='javascript-closures-mcq';
-
-
--- =====================================================================
--- DONE! EduNexes database is fully ready (YouTube + Coding Module)
--- =====================================================================

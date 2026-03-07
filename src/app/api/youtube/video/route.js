@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 
+export const dynamic = 'force-dynamic';
+
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
 const BASE_URL = 'https://www.googleapis.com/youtube/v3';
 
@@ -22,7 +24,7 @@ export async function GET(request) {
     videoUrl.searchParams.set('id', id);
     videoUrl.searchParams.set('key', YOUTUBE_API_KEY);
 
-    const videoRes = await fetch(videoUrl.toString(), { next: { revalidate: 300 } });
+    const videoRes = await fetch(videoUrl.toString(), { cache: 'no-store' });
     if (!videoRes.ok) {
       return NextResponse.json({ error: 'YouTube API error' }, { status: videoRes.status });
     }
@@ -61,7 +63,7 @@ export async function GET(request) {
     relatedUrl.searchParams.set('key', YOUTUBE_API_KEY);
     relatedUrl.searchParams.set('safeSearch', 'strict');
 
-    const relatedRes = await fetch(relatedUrl.toString(), { next: { revalidate: 300 } });
+    const relatedRes = await fetch(relatedUrl.toString(), { cache: 'no-store' });
     let relatedVideos = [];
 
     if (relatedRes.ok) {
@@ -77,7 +79,7 @@ export async function GET(request) {
         relDetailsUrl.searchParams.set('id', relIds.join(','));
         relDetailsUrl.searchParams.set('key', YOUTUBE_API_KEY);
 
-        const relDetailsRes = await fetch(relDetailsUrl.toString(), { next: { revalidate: 300 } });
+        const relDetailsRes = await fetch(relDetailsUrl.toString(), { cache: 'no-store' });
         if (relDetailsRes.ok) {
           const relDetailsData = await relDetailsRes.json();
           relatedVideos = (relDetailsData.items || []).map((r) => ({
