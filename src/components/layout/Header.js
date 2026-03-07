@@ -44,9 +44,9 @@ export default function Header({ onToggleSidebar }) {
   };
 
   const handleLogout = async () => {
-    await signOut();
     setDropdownOpen(false);
-    router.push('/login');
+    await signOut();
+    window.location.href = '/login';
   };
 
   const initials = profile?.full_name
