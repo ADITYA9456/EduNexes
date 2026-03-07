@@ -1,9 +1,8 @@
 'use client';
 
 import { formatCount, timeAgo } from '@/lib/utils';
-import Image from 'next/image';
 import Link from 'next/link';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { HiExternalLink, HiPlay } from 'react-icons/hi';
 import { HiSparkles } from 'react-icons/hi2';
 
@@ -48,6 +47,15 @@ function generateSummary(video) {
 
 export default function AISummaryPanel({ video }) {
   const summary = useMemo(() => generateSummary(video), [video]);
+  const [imgError, setImgError] = useState(false);
+
+  // Reset imgError when video changes
+  const videoId = video?.youtube_id || video?.id;
+  const prevVideoIdRef = useMemo(() => ({ current: null }), []);
+  if (videoId !== prevVideoIdRef.current) {
+    prevVideoIdRef.current = videoId;
+    if (imgError) setImgError(false);
+  }
 
   if (!video) {
     return (
@@ -62,16 +70,20 @@ export default function AISummaryPanel({ video }) {
   }
 
   const thumbnail = video.thumbnail_url || video.thumbnail || '';
-  const videoId = video.youtube_id || video.id;
   const views = video.view_count || 0;
 
   return (
     <div className="ai-panel animate-fade-in">
       {/* Preview */}
       <Link href={`/video/${videoId}`} className="ai-panel__preview">
-        {thumbnail && (
-          <Image src={thumbnail} alt={video.title} fill sizes="400px" />
-        )}
+        {thumbnail && !imgError ? (
+          <img
+            src={thumbnail}
+            alt={video.title}
+            onError={() => setImgError(true)}
+            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
+          />
+        ) : null}
         <div className="ai-panel__play-overlay">
           <div className="ai-panel__play-btn">
             <HiPlay size={32} />

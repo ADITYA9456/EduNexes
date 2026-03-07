@@ -25,6 +25,10 @@ export default function HomePage() {
   const sentinelRef = useRef(null);
   // Prevent duplicate fetches
   const fetchingRef = useRef(false);
+  // Track page number for fallback pagination
+  const pageRef = useRef(0);
+  // Track seen video IDs to avoid duplicates across pages
+  const seenIdsRef = useRef(new Set());
 
   const fetchVideos = useCallback(async (reset = false, pageToken = '') => {
     if (fetchingRef.current) return;
@@ -32,6 +36,8 @@ export default function HomePage() {
 
     if (reset) {
       setLoading(true);
+      pageRef.current = 0;
+      seenIdsRef.current = new Set();
     } else {
       setLoadingMore(true);
     }
@@ -41,9 +47,10 @@ export default function HomePage() {
       if (searchQuery) params.set('q', searchQuery);
       if (category && category !== 'All') params.set('category', category);
       if (pageToken) params.set('pageToken', pageToken);
+      params.set('page', String(pageRef.current));
 
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 15000);
+      const timer = setTimeout(() => controller.abort(), 20000);
       let res;
       try {
         res = await fetch(`/api/youtube/search?${params.toString()}`, {
@@ -56,13 +63,23 @@ export default function HomePage() {
       const data = await res.json();
 
       if (res.ok && data.videos) {
-        setVideos(reset ? data.videos : (prev) => [...prev, ...data.videos]);
+        // Deduplicate videos across pages
+        const newVideos = data.videos.filter((v) => {
+          const id = v.youtube_id || v.id;
+          if (seenIdsRef.current.has(id)) return false;
+          seenIdsRef.current.add(id);
+          return true;
+        });
+
+        setVideos(reset ? newVideos : (prev) => [...prev, ...newVideos]);
         setNextPageToken(data.nextPageToken || null);
-        setHasMore(!!data.nextPageToken);
+        setHasMore(!!data.nextPageToken && newVideos.length > 0);
         setError(null);
+        pageRef.current += 1;
+
         // Auto-select first video on fresh load
-        if (reset && data.videos.length > 0) {
-          setSelectedVideo(data.videos[0]);
+        if (reset && newVideos.length > 0) {
+          setSelectedVideo(newVideos[0]);
         }
       } else {
         if (reset) setVideos([]);

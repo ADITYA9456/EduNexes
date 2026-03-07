@@ -1,7 +1,7 @@
 'use client';
 
 import { formatCount, parseDuration, timeAgo, truncate } from '@/lib/utils';
-import Image from 'next/image';
+import { useState } from 'react';
 
 export default function VideoListItem({ video, isSelected, onSelect }) {
   const thumbnail = video.thumbnail_url || video.thumbnail || '';
@@ -12,6 +12,7 @@ export default function VideoListItem({ video, isSelected, onSelect }) {
   const videoId = video.youtube_id || video.id;
   const createdAt = video.published_at || video.created_at;
   const views = video.view_count || 0;
+  const [imgError, setImgError] = useState(false);
 
   return (
     <div
@@ -22,8 +23,13 @@ export default function VideoListItem({ video, isSelected, onSelect }) {
       onKeyDown={(e) => { if (e.key === 'Enter') onSelect(video); }}
     >
       <div className="vlist-item__thumb">
-        {thumbnail ? (
-          <Image src={thumbnail} alt={title} fill sizes="180px" />
+        {thumbnail && !imgError ? (
+          <img
+            src={thumbnail}
+            alt={title}
+            onError={() => setImgError(true)}
+            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
+          />
         ) : (
           <div className="vlist-item__no-thumb">No Thumbnail</div>
         )}
